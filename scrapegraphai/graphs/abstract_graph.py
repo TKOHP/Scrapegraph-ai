@@ -9,7 +9,33 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional, Type
 
-from langchain_core.language_models.chat_models import init_chat_model
+try:
+    from langchain_core.language_models.chat_models import init_chat_model
+except Exception:
+    def init_chat_model(**llm_params):
+        """兼容创建聊天模型的工厂函数，在缺少 init_chat_model 时提供回退实现"""
+        provider = llm_params.get("model_provider")
+        if provider == "openai":
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(**llm_params)
+        if provider == "azure_openai":
+            from langchain_openai import AzureChatOpenAI
+            return AzureChatOpenAI(**llm_params)
+        if provider == "ollama":
+            from langchain_community.chat_models import ChatOllama
+            return ChatOllama(**llm_params)
+        if provider == "bedrock":
+            from langchain_aws.chat_models import ChatBedrock
+            return ChatBedrock(**llm_params)
+        if provider == "mistralai":
+            try:
+                from langchain_mistralai.chat_models import ChatMistralAI
+            except Exception as e:
+                raise ImportError(f"Missing mistralai provider: {e}")
+            return ChatMistralAI(**llm_params)
+        raise ImportError(
+            f"init_chat_model not available and unsupported provider '{provider}'. Please install the appropriate provider package."
+        )
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from pydantic import BaseModel
 
@@ -184,8 +210,11 @@ class AbstractGraph(ABC):
             ]
             if len(possible_providers) <= 0:
                 raise ValueError(
-                    f"""Provider {llm_params["model_provider"]} is not supported.
-                                If possible, try to use a model instance instead."""
+                    (
+                        f"Unknown model '{llm_params.get('model')}'. "
+                        "Please specify as 'provider/model' (e.g., 'openai/gpt-4o') "
+                        "or provide a pre-instantiated 'model_instance'."
+                    )
                 )
             llm_params["model_provider"] = possible_providers[0]
             print(
@@ -195,10 +224,13 @@ class AbstractGraph(ABC):
                 )
             )
 
-        if llm_params["model_provider"] not in known_providers:
+        provider = llm_params.get("model_provider")
+        if provider not in known_providers:
             raise ValueError(
-                f"""Provider {llm_params["model_provider"]} is not supported.
-                             If possible, try to use a model instance instead."""
+                (
+                    f"Provider '{provider}' is not supported. "
+                    "Please use a supported provider or pass 'model_instance'."
+                )
             )
 
         if llm_params.get("model_tokens", None) is None:

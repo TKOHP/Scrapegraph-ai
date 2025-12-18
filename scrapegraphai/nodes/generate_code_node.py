@@ -12,10 +12,54 @@ from typing import Any, Dict, List, Optional
 from bs4 import BeautifulSoup
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validate
-from langchain_core.output_parsers import ResponseSchema, StructuredOutputParser
+try:
+    from langchain_core.output_parsers import (
+        ResponseSchema,
+        StructuredOutputParser,
+        StrOutputParser,
+    )
+except Exception:
+    class ResponseSchema:
+        """轻量级回退：描述需要解析的 JSON 字段结构"""
+
+        def __init__(self, name: str, description: str = ""):
+            self.name = name
+            self.description = description
+
+    class StructuredOutputParser:
+        """轻量级回退：提供格式指令与将文本解析为 JSON 的能力"""
+
+        def __init__(self, schemas: List[ResponseSchema]):
+            self.schemas = schemas
+
+        @classmethod
+        def from_response_schemas(cls, schemas: List[ResponseSchema]):
+            return cls(schemas)
+
+        def get_format_instructions(self) -> str:
+            keys = ", ".join([s.name for s in self.schemas])
+            return f"Please return a JSON object containing keys: {keys}. Use valid JSON syntax."
+
+        def invoke(self, text: str):
+            try:
+                return json.loads(text)
+            except Exception:
+                match = re.search(r"\{[\s\S]*\}", text)
+                if match:
+                    try:
+                        return json.loads(match.group(0))
+                    except Exception:
+                        return {"parse_error": text}
+                return {"parse_error": text}
+
+    class StrOutputParser:
+        """轻量级回退：原样返回文本"""
+
+        def invoke(self, text: str):
+            return text
+
 from langchain_core.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOllama
-from langchain_core.output_parsers import StrOutputParser
 
 from ..prompts import TEMPLATE_INIT_CODE_GENERATION, TEMPLATE_SEMANTIC_COMPARISON
 from ..utils import (

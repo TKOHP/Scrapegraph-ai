@@ -128,6 +128,7 @@ models_tokens = {
     },
     "oneapi": {
         "qwen-turbo": 6000,
+        "qwen-plus": 6000,
     },
     "nvidia": {
         "meta/llama3-70b-instruct": 419,
