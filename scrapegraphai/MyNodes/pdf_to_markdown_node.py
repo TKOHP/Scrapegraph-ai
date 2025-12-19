@@ -81,16 +81,25 @@ class PdfToMarkdownNode(BaseNode):
         input_keys = self.get_input_keys(state)
         papers: List[AIPaper] = state[input_keys[0]]
 
+        self.logger.info(f"Markdown节点——开始处理 papers={len(papers)}")
         updated: List[AIPaper] = []
-        for p in papers:
+        generated = 0
+        reused = 0
+        skipped = 0
+        failed = 0
+        for idx, p in enumerate(papers, start=1):
             try:
                 if not p.pdfLink or not os.path.exists(p.pdfLink):
+                    skipped += 1
+                    self.logger.info(f"Markdown节点——第 {idx}/{len(papers)} 篇跳过：缺少 pdfLink")
                     updated.append(p)
                     continue
                 md_path = os.path.splitext(p.pdfLink)[0] + ".md"
                 if os.path.exists(md_path):
                     self.db.update_fields(int(p.id), {"mdLink": md_path})
                     p.mdLink = md_path
+                    reused += 1
+                    self.logger.info(f"Markdown节点——第 {idx}/{len(papers)} 篇复用已存在 md={md_path}")
                     updated.append(p)
                     continue
                 text = self._extract_text_from_pdf(p.pdfLink)
@@ -99,11 +108,18 @@ class PdfToMarkdownNode(BaseNode):
                     f.write(md)
                 self.db.update_fields(int(p.id), {"mdLink": md_path})
                 p.mdLink = md_path
+                generated += 1
+                self.logger.info(
+                    f"Markdown节点——第 {idx}/{len(papers)} 篇生成成功 md={md_path} chars={len(md)}"
+                )
                 updated.append(p)
             except Exception as e:
                 self.logger.error(f"生成 Markdown 失败 id={p.id} path={p.pdfLink} err={e}")
+                failed += 1
                 updated.append(p)
 
+        self.logger.info(
+            f"Markdown节点——处理完成 generated={generated} reused={reused} skipped={skipped} failed={failed}"
+        )
         state.update({self.output[0]: updated})
         return state
-

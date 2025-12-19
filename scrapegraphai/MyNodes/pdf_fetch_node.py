@@ -196,10 +196,20 @@ class PdfFetchNode(BaseNode):
         input_keys = self.get_input_keys(state)
         papers: List[AIPaper] = state[input_keys[0]]
 
+        self.logger.info(
+            f"PDF节点——开始处理 papers={len(papers)} download_dir={self.download_dir} timeout={self.timeout}"
+        )
         updated: List[AIPaper] = []
-        for p in papers:
+        downloaded = 0
+        skipped = 0
+        no_pdf = 0
+        failed = 0
+        for idx, p in enumerate(papers, start=1):
             try:
+                self.logger.info(f"PDF节点——第 {idx}/{len(papers)} 篇开始处理 id={p.id} url={p.urlLink}")
                 if p.pdfLink and os.path.exists(p.pdfLink):
+                    skipped += 1
+                    self.logger.info(f"PDF节点——第 {idx}/{len(papers)} 篇已存在 pdf={p.pdfLink}")
                     updated.append(p)
                     continue
                 candidates = []
@@ -207,6 +217,7 @@ class PdfFetchNode(BaseNode):
                     candidates = [p.urlLink]
                 else:
                     candidates = self._find_pdf_candidates(p.urlLink)
+                self.logger.info(f"PDF节点——第 {idx}/{len(papers)} 篇候选 PDF 链接 {len(candidates)} 条")
                 target_url = None
                 for c in candidates:
                     if self._validate_pdf(c):
@@ -214,16 +225,22 @@ class PdfFetchNode(BaseNode):
                         break
                 if not target_url:
                     self.logger.warning(f"未找到有效 PDF url={p.urlLink}")
+                    no_pdf += 1
                     updated.append(p)
                     continue
                 save_path = self._download_pdf(target_url, self.download_dir)
                 self.db.update_fields(int(p.id), {"pdfLink": save_path})
                 p.pdfLink = save_path
+                downloaded += 1
+                self.logger.info(f"PDF节点——第 {idx}/{len(papers)} 篇下载成功 pdf={save_path}")
                 updated.append(p)
             except Exception as e:
                 self.logger.error(f"下载 PDF 失败 id={p.id} url={p.urlLink} err={e}")
+                failed += 1
                 updated.append(p)
 
+        self.logger.info(
+            f"PDF节点——处理完成 downloaded={downloaded} skipped={skipped} no_pdf={no_pdf} failed={failed}"
+        )
         state.update({self.output[0]: updated})
         return state
-

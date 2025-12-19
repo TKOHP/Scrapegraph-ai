@@ -11,6 +11,7 @@ Google Scholar 订阅论文处理图
 同时提供对数据库的增删改查接口。
 """
 
+import time
 from typing import List, Optional, Type
 from pydantic import BaseModel
 
@@ -39,27 +40,38 @@ class GoogleScholarPaperGraph(AbstractGraph):
     def __init__(
         self,
         prompt: str,
-        emails: List[str],
-        subject: str,
+        email_config: dict,
+        subjects: List[str],
         config: dict,
         schema: Optional[Type[BaseModel]] = None,
+        simple_llm: Optional[object] = None,
+        complex_llm: Optional[object] = None,
     ):
         """
         初始化图实例
         
         Args:
             prompt: 流程说明或占位文本
-            emails: 邮件文本列表
-            subject: 固定主题（来自外部订阅配置）
+            email_config: 邮箱抓取配置字典（imap_server、account、password 等）
+            subjects: 主题池（中文主题列表，如“金融科技”、“大模型智能体”等）
             config: 图配置，需包含 llm 字段；若不使用 LLM，可传入 {"llm": {"model_instance": None, "model_tokens": 8192}}
             schema: 可选的结构模式
         """
-        super().__init__(prompt, config, emails, schema)
+        self.simple_llm = simple_llm
+        self.complex_llm = complex_llm
+        self.email_config = email_config or {}
+        self.subjects_pool = subjects
+
+        super().__init__(prompt, config, email_config, schema)
         self.logger = get_logger(__name__)
-        self.input_key = "emails"
-        self.fixed_subject = subject
+        self.input_key = "email_config"
         db_path = (config or {}).get("db_path", "data/google_scholar_papers.db")
         self.db = DatabaseManager(db_path)
+        for node in getattr(self, "graph", None).nodes:
+            if isinstance(node, DocumentClassifyNode):
+                node.llm_model = self.simple_llm
+            if isinstance(node, DocumentSummaryNode):
+                node.llm_model = self.complex_llm
 
     def _create_graph(self) -> BaseGraph:
         """
@@ -69,9 +81,12 @@ class GoogleScholarPaperGraph(AbstractGraph):
         download_dir = (self.config or {}).get("download_dir", "data/papers")
 
         email_node = EmailLinkNode(
-            input="emails & subject",
+            input="email_config",
             output=["papers"],
-            node_config={"db_path": db_path},
+            node_config={
+                "db_path": db_path,
+                "use_qq_email": True,
+            },
         )
         pdf_node = PdfFetchNode(
             input="papers",
@@ -84,14 +99,20 @@ class GoogleScholarPaperGraph(AbstractGraph):
             node_config={"db_path": db_path},
         )
         classify_node = DocumentClassifyNode(
-            input="papers & subject",
+            input="papers & subjects",
             output=["papers"],
-            node_config={"db_path": db_path},
+            node_config={
+                "db_path": db_path,
+                "llm_model": self.simple_llm,
+            },
         )
         summary_node = DocumentSummaryNode(
             input="papers",
             output=["papers"],
-            node_config={"db_path": db_path},
+            node_config={
+                "db_path": db_path,
+                "llm_model": self.complex_llm,
+            },
         )
 
         return BaseGraph(
@@ -110,8 +131,23 @@ class GoogleScholarPaperGraph(AbstractGraph):
         """
         执行流程并返回处理后的 `AIPaper` 列表
         """
-        inputs = {"user_prompt": self.prompt, "emails": self.source, "subject": self.fixed_subject}
+        email_cfg = self.source or {}
+        self.logger.info(
+            f"流程图——开始执行 subjects_pool={len(self.subjects_pool)} "
+            f"days_recent={email_cfg.get('days_recent', 7)} "
+            f"sender_email={email_cfg.get('sender_email', 'scholaralerts-noreply@google.com')} "
+            f"required_subject_contains={(email_cfg.get('required_subject_contains') or '')}"
+        )
+        started = time.time()
+        inputs = {
+            "user_prompt": self.prompt,
+            "email_config": self.source,
+            "subjects": self.subjects_pool,
+        }
         self.final_state, self.execution_info = self.graph.execute(inputs)
+        elapsed_ms = int((time.time() - started) * 1000)
+        out_papers = self.final_state.get("papers", []) if isinstance(self.final_state, dict) else []
+        self.logger.info(f"流程图——执行完成 papers={len(out_papers)} elapsed_ms={elapsed_ms}")
         return self.final_state.get("papers", [])
 
     def db_insert(self, paper: AIPaper) -> int:
@@ -138,3 +174,4 @@ class GoogleScholarPaperGraph(AbstractGraph):
         """
         return self.db.list_papers(subject)
 
+#（已移除：邮箱与模型环境变量；请在示例 main 中配置并传入）

@@ -41,6 +41,8 @@ lib/
 
 # extras
 cache/
+data/
+debug/
 run_smart_scraper.py
 
 # Byte-compiled / optimized / DLL files
