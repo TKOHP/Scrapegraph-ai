@@ -6,7 +6,7 @@ Google Scholar 订阅论文处理图
 2) PDF 获取与下载
 3) PDF 转标准化 Markdown
 4) 文档分类（提取 meta/subject/publishTime）
-5) 单文档总结（生成 summaryLink）
+5) 文献概览与深度分析（生成 overviewLink 与 analysisLink）
 
 同时提供对数据库的增删改查接口。
 """
@@ -15,17 +15,18 @@ import time
 from typing import List, Optional, Type
 from pydantic import BaseModel
 
-from ..utils import get_logger
-from ..nodes.base_node import BaseNode
-from ..graphs.base_graph import BaseGraph
-from ..graphs.abstract_graph import AbstractGraph
-from ..MyNodes import (
+from scrapegraphai.utils import get_logger
+from scrapegraphai.nodes.base_node import BaseNode
+from scrapegraphai.graphs.base_graph import BaseGraph
+from scrapegraphai.graphs.abstract_graph import AbstractGraph
+from ..Nodes import (
     DatabaseManager,
     EmailLinkNode,
     PdfFetchNode,
     PdfToMarkdownNode,
     DocumentClassifyNode,
-    DocumentSummaryNode,
+    DocumentOverviewNode,
+    ResearchAnalysisNode,
     AIPaper,
 )
 
@@ -63,22 +64,28 @@ class GoogleScholarPaperGraph(AbstractGraph):
         self.subjects_pool = subjects
 
         super().__init__(prompt, config, email_config, schema)
-        self.logger = get_logger(__name__)
+        self.logger = get_logger()
         self.input_key = "email_config"
-        db_path = (config or {}).get("db_path", "data/google_scholar_papers.db")
+        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
         self.db = DatabaseManager(db_path)
         for node in getattr(self, "graph", None).nodes:
             if isinstance(node, DocumentClassifyNode):
                 node.llm_model = self.simple_llm
-            if isinstance(node, DocumentSummaryNode):
+            if isinstance(node, (DocumentOverviewNode, ResearchAnalysisNode)):
                 node.llm_model = self.complex_llm
+            if isinstance(node, PdfToMarkdownNode):
+                node.llm_model = self.simple_llm
 
     def _create_graph(self) -> BaseGraph:
         """
         创建节点并构建执行图
         """
-        db_path = (self.config or {}).get("db_path", "data/google_scholar_papers.db")
-        download_dir = (self.config or {}).get("download_dir", "data/papers")
+        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
+        download_dir = (self.config or {}).get("download_dir", "AIpaper/data/papers")
+        rebuild_md = bool((self.config or {}).get("rebuild_md", False))
+        rebuild_classify = bool((self.config or {}).get("rebuild_classify", False))
+        rebuild_overview = bool((self.config or {}).get("rebuild_overview", False))
+        rebuild_analysis = bool((self.config or {}).get("rebuild_analysis", False))
 
         email_node = EmailLinkNode(
             input="email_config",
@@ -96,32 +103,45 @@ class GoogleScholarPaperGraph(AbstractGraph):
         md_node = PdfToMarkdownNode(
             input="papers",
             output=["papers"],
-            node_config={"db_path": db_path},
+            node_config={
+                "db_path": db_path,
+                "force_rebuild": rebuild_md,
+                "format_with_llm": True,
+            },
         )
         classify_node = DocumentClassifyNode(
             input="papers & subjects",
             output=["papers"],
             node_config={
                 "db_path": db_path,
-                "llm_model": self.simple_llm,
+                "force_rebuild": rebuild_classify,
             },
         )
-        summary_node = DocumentSummaryNode(
+        overview_node = DocumentOverviewNode(
             input="papers",
             output=["papers"],
             node_config={
                 "db_path": db_path,
-                "llm_model": self.complex_llm,
+                "force_rebuild": rebuild_overview,
+            },
+        )
+        analysis_node = ResearchAnalysisNode(
+            input="papers",
+            output=["papers"],
+            node_config={
+                "db_path": db_path,
+                "force_rebuild": rebuild_analysis,
             },
         )
 
         return BaseGraph(
-            nodes=[email_node, pdf_node, md_node, classify_node, summary_node],
+            nodes=[email_node, pdf_node, md_node, classify_node, overview_node, analysis_node],
             edges=[
                 (email_node, pdf_node),
                 (pdf_node, md_node),
                 (md_node, classify_node),
-                (classify_node, summary_node),
+                (classify_node, overview_node),
+                (overview_node, analysis_node),
             ],
             entry_point=email_node,
             graph_name=self.__class__.__name__,

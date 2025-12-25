@@ -5,6 +5,7 @@
 提取论文网页链接，并创建/更新数据库记录。
 """
 
+import os
 import re
 import imaplib
 import email
@@ -14,12 +15,15 @@ from datetime import datetime, timedelta
 import time
 import quopri
 import base64
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs, unquote
 
-from ..utils import get_logger
-from ..nodes.base_node import BaseNode
-from .db_manager import DatabaseManager, AIPaper
+from scrapegraphai.utils import get_logger
+from scrapegraphai.nodes.base_node import BaseNode
+try:
+    from .db_manager import DatabaseManager, AIPaper
+except ImportError:
+    from AIpaper.Nodes.db_manager import DatabaseManager, AIPaper
 
 
 class EmailLinkNode(BaseNode):
@@ -50,8 +54,8 @@ class EmailLinkNode(BaseNode):
             node_name: 节点名称
         """
         super().__init__(node_name, "node", input, output, node_config=node_config)
-        self.logger = get_logger(__name__)
-        self.db_path = (self.node_config or {}).get("db_path", "data/google_scholar_papers.db")
+        self.logger = get_logger()
+        self.db_path = (self.node_config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
         self.db = DatabaseManager(self.db_path)
         self.use_qq_email = bool((self.node_config or {}).get("use_qq_email", True))
 
@@ -127,6 +131,17 @@ class EmailLinkNode(BaseNode):
         except Exception:
             return ""
 
+    def _format_datetime_str(self, dt: Optional[datetime]) -> Optional[str]:
+        """
+        将 datetime 格式化为字符串 "YYYY-MM-DD HH:MM:SS"
+        """
+        if dt is None:
+            return None
+        try:
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
     def _imap_fetch_email_contents(
         self,
         imap_server: str,
@@ -135,15 +150,15 @@ class EmailLinkNode(BaseNode):
         sender_email: str,
         days_recent: int,
         required_subject_contains: Optional[str],
-    ) -> List[str]:
+    ) -> List[Tuple[str, Optional[str]]]:
         """
-        通过 QQ 邮箱 IMAP 拉取符合条件的邮件正文内容
+        通过 QQ 邮箱 IMAP 拉取符合条件的邮件正文内容，并返回 (正文, 收到时间) 列表
         """
         self.logger.info(
             f"邮件节点——开始拉取邮箱内容 imap_server={imap_server} sender_email={sender_email} "
             f"days_recent={days_recent} required_subject_contains={required_subject_contains or ''}"
         )
-        contents: List[str] = []
+        contents: List[Tuple[str, Optional[str]]] = []
         mail = None
         for attempt in range(5):
             try:
@@ -203,17 +218,16 @@ class EmailLinkNode(BaseNode):
                         dropped_by_subject += 1
                         continue
 
-                    if int(days_recent) > 0:
-                        date_str = str(email_message.get("Date") or "")
-                        try:
-                            msg_dt = parsedate_to_datetime(date_str) if date_str else None
-                            if msg_dt is not None:
-                                msg_dt = msg_dt.replace(tzinfo=None) if getattr(msg_dt, "tzinfo", None) else msg_dt
-                                if msg_dt < earliest:
-                                    dropped_by_date += 1
-                                    continue
-                        except Exception:
-                            pass
+                    date_str = str(email_message.get("Date") or "")
+                    msg_dt = parsedate_to_datetime(date_str) if date_str else None
+                    if msg_dt is not None:
+                        msg_dt = msg_dt.replace(tzinfo=None) if getattr(msg_dt, "tzinfo", None) else msg_dt
+                        if int(days_recent) > 0 and msg_dt < earliest:
+                            dropped_by_date += 1
+                            self.logger.info("邮件节点——达到时间范围边界，提前结束拉取")
+                            break
+
+                    received_str = self._format_datetime_str(msg_dt) if msg_dt is not None else (date_str or None)
 
                     body = ""
                     if email_message.is_multipart():
@@ -224,7 +238,7 @@ class EmailLinkNode(BaseNode):
                         body = self._decode_part_content(email_message)
 
                     if body:
-                        contents.append(body)
+                        contents.append((body, received_str))
                         accepted += 1
                 except Exception:
                     dropped_by_decode += 1
@@ -264,7 +278,7 @@ class EmailLinkNode(BaseNode):
 
         email_config: dict = state["email_config"]
 
-        emails: List[str] = []
+        emails: List[Tuple[str, Optional[str]]] = []
         if self.use_qq_email:
             imap_server = (email_config or {}).get("imap_server", "imap.qq.com")
             email_account = (email_config or {}).get("account") or ""
@@ -298,7 +312,8 @@ class EmailLinkNode(BaseNode):
         existed_count = 0
 
         try:
-            for idx, text in enumerate(emails, start=1):
+            for idx, item in enumerate(emails, start=1):
+                text, received_time = item
                 urls = self._extract_urls_from_email_html(text or "")
                 total_urls += len(urls)
                 self.logger.info(f"邮件节点——第 {idx}/{len(emails)} 封邮件提取到 {len(urls)} 条链接")
@@ -310,6 +325,7 @@ class EmailLinkNode(BaseNode):
                     if existing:
                         existed_count += 1
                         papers.append(existing)
+                        
                         continue
 
                     paper = AIPaper(
@@ -317,10 +333,12 @@ class EmailLinkNode(BaseNode):
                         urlLink=url,
                         pdfLink=None,
                         mdLink=None,
-                        summaryLink=None,
+                        overviewLink=None,
+                        analysisLink=None,
                         meta=None,
                         publishTime=None,
                         subject=None,
+                        receivedTime=received_time,
                     )
                     new_id = self.db.insert_paper(paper)
                     paper.id = new_id
@@ -336,3 +354,166 @@ class EmailLinkNode(BaseNode):
         )
         state.update({self.output[0]: papers})
         return state
+
+def run_test_email_order(email_config: dict) -> None:
+    """
+    测试函数：列出符合条件的邮件标题与时间，并判断是否按时间倒序排序
+    
+    参数:
+        email_config: 邮箱配置字典，需包含 account、password、imap_server、sender_email、days_recent、required_subject_contains
+    """
+    logger = get_logger()
+    imap_server = (email_config or {}).get("imap_server", "imap.qq.com")
+    email_account = (email_config or {}).get("account") or ""
+    password = (email_config or {}).get("password") or ""
+    sender_email = (email_config or {}).get("sender_email", "scholaralerts-noreply@google.com")
+    days_recent = int((email_config or {}).get("days_recent", 7))
+    required_subject_contains = (email_config or {}).get("required_subject_contains")
+    if not email_account or not password:
+        raise ValueError("缺少 QQ 邮箱账号或授权码：请在 email_config 中提供 account/password")
+    logger.info(
+        f"测试邮件排序——开始获取邮件 sender_email={sender_email} days_recent={days_recent} "
+        f"required_subject_contains={required_subject_contains or ''}"
+    )
+    mail = None
+    try:
+        t_all_start = time.perf_counter()
+        t0 = time.perf_counter()
+        mail = imaplib.IMAP4_SSL(imap_server)
+        connect_time = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        mail.login(email_account, password)
+        login_time = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        mail.select("inbox")
+        select_time = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        typ, data = mail.search(None, "FROM", sender_email)
+        search_time = time.perf_counter() - t0
+        if typ != "OK":
+            print("邮件搜索失败")
+            return
+        ids = data[0].split()
+        ids = list(reversed(ids))[:300]
+        earliest = datetime.now() - timedelta(days=max(int(days_recent), 0))
+        items = []
+        scanned = 0
+        fetch_total_time = 0.0
+        parse_total_time = 0.0
+        max_fetch_time = 0.0
+        max_parse_time = 0.0
+        for eid in ids:
+            scanned += 1
+            try:
+                tf = time.perf_counter()
+                typ_f, msg_data = mail.fetch(eid, "(RFC822)")
+                fetch_dt = time.perf_counter() - tf
+                fetch_total_time += fetch_dt
+                if fetch_dt > max_fetch_time:
+                    max_fetch_time = fetch_dt
+                if typ_f != "OK":
+                    continue
+                raw = msg_data[0][1]
+                tp = time.perf_counter()
+                email_message = email.message_from_bytes(raw, policy=policy.default)
+                subject = str(email_message.get("Subject") or "").strip()
+                date_str = str(email_message.get("Date") or "")
+                dt = None
+                try:
+                    dt = parsedate_to_datetime(date_str) if date_str else None
+                    if dt is not None:
+                        dt = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+                    if days_recent > 0 and dt is not None and dt < earliest:
+                        print("达到时间范围边界，提前结束拉取")
+                        break
+                except Exception:
+                    dt = None
+                if required_subject_contains and (required_subject_contains not in subject):
+                    continue
+                parse_dt = time.perf_counter() - tp
+                parse_total_time += parse_dt
+                if parse_dt > max_parse_time:
+                    max_parse_time = parse_dt
+                items.append({"subject": subject, "date": dt, "raw_date": date_str})
+            except Exception:
+                continue
+        t_all = (time.perf_counter() - t_all_start)
+        print(f"测试邮件统计：总数={len(items)} 扫描={scanned}")
+        for i, it in enumerate(items, start=1):
+            disp = it["date"].strftime("%Y-%m-%d %H:%M:%S") if it["date"] else (it["raw_date"] or "")
+            print(f"{i}. {disp} | {it['subject']}")
+        is_desc = True
+        for i in range(len(items) - 1):
+            left = items[i]["date"] or datetime.min
+            right = items[i + 1]["date"] or datetime.min
+            if left < right:
+                is_desc = False
+                break
+        print(f"是否按时间倒序：{is_desc}")
+        print(
+            "阶段耗时(ms)："
+            f"连接={connect_time*1000:.1f} 登录={login_time*1000:.1f} 选择={select_time*1000:.1f} "
+            f"搜索={search_time*1000:.1f} 拉取总计={fetch_total_time*1000:.1f} 解析总计={parse_total_time*1000:.1f} 总计={t_all*1000:.1f}"
+        )
+        durations = {
+            "连接": connect_time,
+            "登录": login_time,
+            "选择": select_time,
+            "搜索": search_time,
+            "拉取总计": fetch_total_time,
+            "解析总计": parse_total_time,
+        }
+        longest_stage = max(durations.items(), key=lambda kv: kv[1])
+        print(
+            f"单封最大拉取耗时(ms)={max_fetch_time*1000:.1f} 最大解析耗时(ms)={max_parse_time*1000:.1f}"
+        )
+        print(f"耗时最长阶段：{longest_stage[0]} {longest_stage[1]*1000:.1f} ms")
+    except Exception as e:
+        logger.error(f"测试邮件排序失败: {e}")
+        print(f"测试失败：{e}")
+    finally:
+        try:
+            if mail is not None:
+                mail.close()
+        except Exception:
+            pass
+
+def build_email_config_for_test() -> dict:
+    """
+    构造测试所需的邮箱配置字典（QQ 邮箱）
+    
+    返回字段:
+        - imap_server: IMAP 服务地址（默认 imap.qq.com）
+        - account: 邮箱账号，默认读取环境变量 QQ_EMAIL
+        - password: 邮箱授权码或密码，默认读取环境变量 QQ_PASSWORD
+        - sender_email: 过滤的发件人（默认 Google Scholar 提醒）
+        - days_recent: 近期天数过滤
+        - required_subject_contains: 主题包含关键词，可选，默认读取环境变量 REQUIRED_SUBJECT_CONTAINS
+    """
+    imap_server = os.getenv("QQ_IMAP_SERVER", "imap.qq.com")
+    account = os.getenv("QQ_EMAIL", "")
+    password = os.getenv("QQ_PASSWORD", "")
+    required_subject_contains = os.getenv("REQUIRED_SUBJECT_CONTAINS", None)
+    return {
+        "imap_server": imap_server,
+        "account": account,
+        "password": password,
+        "sender_email": "scholaralerts-noreply@google.com",
+        "days_recent": int(os.getenv("DAYS_RECENT", "2") or "2"),
+        "required_subject_contains": required_subject_contains,
+    }
+
+if __name__ == "__main__":
+    from scrapegraphai.utils import set_verbosity_info, set_formatting
+    set_verbosity_info()
+    set_formatting()
+    try:
+        from AIpaper.google_scholar_paper_main import build_email_config
+        cfg = build_email_config()
+        run_test_email_order(cfg)
+    except Exception as e:
+        try:
+            cfg = build_email_config_for_test()
+            run_test_email_order(cfg)
+        except Exception as e2:
+            print(f"输入或执行发生错误：{e2}")

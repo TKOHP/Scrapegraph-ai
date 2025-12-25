@@ -13,8 +13,8 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 import requests
 
-from ..utils import get_logger
-from ..nodes.base_node import BaseNode
+from scrapegraphai.utils import get_logger
+from scrapegraphai.nodes.base_node import BaseNode
 from .db_manager import DatabaseManager, AIPaper
 
 
@@ -50,10 +50,10 @@ class PdfFetchNode(BaseNode):
         初始化节点
         """
         super().__init__(node_name, "node", input, output, node_config=node_config)
-        self.logger = get_logger(__name__)
+        self.logger = get_logger()
         cfg = self.node_config or {}
-        self.db_path = cfg.get("db_path", "data/google_scholar_papers.db")
-        self.download_dir = cfg.get("download_dir", os.path.join("data", "papers"))
+        self.db_path = cfg.get("db_path", "AIpaper/data/google_scholar_papers.db")
+        self.download_dir = cfg.get("download_dir", os.path.join("AIpaper", "data", "papers"))
         self.timeout = int(cfg.get("timeout", 30))
         self.db = DatabaseManager(self.db_path)
         os.makedirs(self.download_dir, exist_ok=True)
@@ -161,6 +161,9 @@ class PdfFetchNode(BaseNode):
     def _download_pdf(self, url: str, save_dir: str, filename: Optional[str] = None) -> str:
         """
         下载 PDF 到指定目录
+        
+        当提供 `filename` 时，直接使用该文件名保存（包含扩展名），若已存在则覆盖；
+        当未提供 `filename` 时，根据 URL 生成安全文件名并避免重名冲突。
         """
         os.makedirs(save_dir, exist_ok=True)
         headers = {
@@ -175,11 +178,12 @@ class PdfFetchNode(BaseNode):
         resp.raise_for_status()
         name = filename or self._safe_filename(url, ".pdf")
         save_path = os.path.join(save_dir, name)
-        base, ext = os.path.splitext(save_path)
-        idx = 2
-        while os.path.exists(save_path):
-            save_path = f"{base}_{idx}{ext}"
-            idx += 1
+        if filename is None:
+            base, ext = os.path.splitext(save_path)
+            idx = 2
+            while os.path.exists(save_path):
+                save_path = f"{base}_{idx}{ext}"
+                idx += 1
         with open(save_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 if chunk:
@@ -228,7 +232,8 @@ class PdfFetchNode(BaseNode):
                     no_pdf += 1
                     updated.append(p)
                     continue
-                save_path = self._download_pdf(target_url, self.download_dir)
+                file_name = f"{int(p.id)}.pdf" if p.id is not None else None
+                save_path = self._download_pdf(target_url, self.download_dir, filename=file_name)
                 self.db.update_fields(int(p.id), {"pdfLink": save_path})
                 p.pdfLink = save_path
                 downloaded += 1

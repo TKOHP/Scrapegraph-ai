@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any, Tuple
 
-from ..utils import get_logger
+from scrapegraphai.utils import get_logger
 
 
 @dataclass
@@ -19,10 +19,12 @@ class AIPaper:
     urlLink: str
     pdfLink: Optional[str]
     mdLink: Optional[str]
-    summaryLink: Optional[str]
+    overviewLink: Optional[str]
+    analysisLink: Optional[str]
     meta: Optional[str]
     publishTime: Optional[str]
     subject: Optional[str]
+    receivedTime: Optional[str]
 
 
 class DatabaseManager:
@@ -39,7 +41,7 @@ class DatabaseManager:
         Args:
             db_path: 数据库文件路径
         """
-        self.logger = get_logger(__name__)
+        self.logger = get_logger()
         self.db_path = db_path
         self._ensure_dir()
         self._init_db()
@@ -70,26 +72,87 @@ class DatabaseManager:
         """
         初始化 `AIpaper` 表结构
         """
-        sql = """
+        create_sql = """
         CREATE TABLE IF NOT EXISTS AIpaper (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             urlLink TEXT NOT NULL,
             pdfLink TEXT,
             mdLink TEXT,
-            summaryLink TEXT,
+            overviewLink TEXT,
+            analysisLink TEXT,
             meta TEXT,
             publishTime TEXT,
-            subject TEXT
+            subject TEXT,
+            receivedTime TEXT
         );
         """
         try:
             with self._get_conn() as conn:
-                conn.execute(sql)
+                conn.execute(create_sql)
                 conn.commit()
+                self._migrate_schema(conn)
             self.logger.info("数据库初始化完成: AIpaper 表就绪")
         except Exception as e:
             self.logger.error(f"初始化数据库失败: {e}")
             raise
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        """
+        迁移旧表结构：
+        - 新增 `overviewLink` 与 `analysisLink` 字段（若不存在）
+        - 迁移旧 `summaryLink` 数据到 `overviewLink`
+        - 删除旧 `summaryLink` 字段（通过重建表）
+        """
+        try:
+            cur = conn.execute("PRAGMA table_info(AIpaper)")
+            cols = [r["name"] for r in cur.fetchall()]
+            need_add_overview = "overviewLink" not in cols
+            need_add_analysis = "analysisLink" not in cols
+            need_add_received = "receivedTime" not in cols
+            has_summary = "summaryLink" in cols
+
+            if need_add_overview:
+                conn.execute("ALTER TABLE AIpaper ADD COLUMN overviewLink TEXT")
+            if need_add_analysis:
+                conn.execute("ALTER TABLE AIpaper ADD COLUMN analysisLink TEXT")
+            if need_add_received:
+                conn.execute("ALTER TABLE AIpaper ADD COLUMN receivedTime TEXT")
+            if need_add_overview or need_add_analysis or need_add_received:
+                conn.commit()
+
+            if has_summary:
+                conn.execute(
+                    "UPDATE AIpaper SET overviewLink = COALESCE(overviewLink, summaryLink)"
+                )
+                conn.commit()
+                conn.execute("ALTER TABLE AIpaper RENAME TO AIpaper_old")
+                conn.execute(
+                    """
+                    CREATE TABLE AIpaper (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        urlLink TEXT NOT NULL,
+                        pdfLink TEXT,
+                        mdLink TEXT,
+                        overviewLink TEXT,
+                        analysisLink TEXT,
+                        meta TEXT,
+                        publishTime TEXT,
+                        subject TEXT,
+                        receivedTime TEXT
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO AIpaper (id, urlLink, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, receivedTime)
+                    SELECT id, urlLink, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, NULL
+                    FROM AIpaper_old;
+                    """
+                )
+                conn.execute("DROP TABLE AIpaper_old")
+                conn.commit()
+        except Exception as e:
+            self.logger.error(f"数据库结构迁移失败: {e}")
 
     def insert_paper(self, paper: AIPaper) -> int:
         """
@@ -105,17 +168,19 @@ class DatabaseManager:
             with self._get_conn() as conn:
                 cur = conn.execute(
                     """
-                    INSERT INTO AIpaper (urlLink, pdfLink, mdLink, summaryLink, meta, publishTime, subject)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO AIpaper (urlLink, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, receivedTime)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper.urlLink,
                         paper.pdfLink,
                         paper.mdLink,
-                        paper.summaryLink,
+                        paper.overviewLink,
+                        paper.analysisLink,
                         paper.meta,
                         paper.publishTime,
                         paper.subject,
+                        paper.receivedTime,
                     ),
                 )
                 conn.commit()
@@ -154,10 +219,12 @@ class DatabaseManager:
                         urlLink=url,
                         pdfLink=updates.get("pdfLink"),
                         mdLink=updates.get("mdLink"),
-                        summaryLink=updates.get("summaryLink"),
+                        overviewLink=updates.get("overviewLink"),
+                        analysisLink=updates.get("analysisLink"),
                         meta=updates.get("meta"),
                         publishTime=updates.get("publishTime"),
                         subject=updates.get("subject"),
+                        receivedTime=updates.get("receivedTime"),
                     )
                     return self.insert_paper(paper)
         except Exception as e:
@@ -211,10 +278,12 @@ class DatabaseManager:
                     urlLink=row["urlLink"],
                     pdfLink=row["pdfLink"],
                     mdLink=row["mdLink"],
-                    summaryLink=row["summaryLink"],
+                    overviewLink=row["overviewLink"],
+                    analysisLink=row["analysisLink"],
                     meta=row["meta"],
                     publishTime=row["publishTime"],
                     subject=row["subject"],
+                    receivedTime=row["receivedTime"],
                 )
         except Exception as e:
             self.logger.error(f"查询论文失败: {e}")
@@ -240,10 +309,12 @@ class DatabaseManager:
                         urlLink=r["urlLink"],
                         pdfLink=r["pdfLink"],
                         mdLink=r["mdLink"],
-                        summaryLink=r["summaryLink"],
+                        overviewLink=r["overviewLink"],
+                        analysisLink=r["analysisLink"],
                         meta=r["meta"],
                         publishTime=r["publishTime"],
                         subject=r["subject"],
+                        receivedTime=r["receivedTime"],
                     )
                     for r in rows
                 ]
@@ -266,10 +337,12 @@ class DatabaseManager:
                     urlLink=r["urlLink"],
                     pdfLink=r["pdfLink"],
                     mdLink=r["mdLink"],
-                    summaryLink=r["summaryLink"],
+                    overviewLink=r["overviewLink"],
+                    analysisLink=r["analysisLink"],
                     meta=r["meta"],
                     publishTime=r["publishTime"],
                     subject=r["subject"],
+                    receivedTime=r["receivedTime"],
                 )
         except Exception as e:
             self.logger.error(f"按 URL 查询失败: {e}")
