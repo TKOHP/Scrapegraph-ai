@@ -24,7 +24,7 @@ except ModuleNotFoundError:
 try:
     from .db_manager import DatabaseManager, AIPaper
 except ImportError:
-    from AIpaper.Nodes.db_manager import DatabaseManager, AIPaper
+    from AIpaper2.Nodes.db_manager import DatabaseManager, AIPaper
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -57,7 +57,7 @@ class PdfToMarkdownNode(BaseNode):
         super().__init__(node_name, "node", input, output, node_config=node_config)
         self.logger = get_logger()
         cfg = self.node_config or {}
-        self.db_path = cfg.get("db_path", "AIpaper/data/google_scholar_papers.db")
+        self.db_path = cfg.get("db_path")
         self.db = DatabaseManager(self.db_path)
         self.force_rebuild = bool(cfg.get("force_rebuild", False))
         self.format_with_llm = bool(cfg.get("format_with_llm", False))
@@ -285,16 +285,17 @@ class PdfToMarkdownNode(BaseNode):
 # =========================
 # 测试入口（单文件运行）
 # =========================
-def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_papers.db") -> None:
+def run_test_for_id(paper_id: int, db_path: Optional[str] = None) -> None:
     """
     使用指定的论文 ID 进行节点功能测试：PDF 转 Markdown
     
     Args:
         paper_id: 数据库中 AIpaper 的主键 ID
-        db_path: SQLite 数据库路径（默认 AIpaper/data/google_scholar_papers.db）
+        db_path: SQLite 数据库路径；为 None 时使用 DatabaseManager.DEFAULT_DB_PATH
     """
     logger = get_logger()
-    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path}")
+    from .db_manager import DatabaseManager
+    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path or DatabaseManager.DEFAULT_DB_PATH}")
     db = DatabaseManager(db_path)
     paper = db.get_paper_by_id(int(paper_id))
     if paper is None:
@@ -311,7 +312,7 @@ def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_p
         },
     )
     try:
-        from AIpaper.google_scholar_paper_main import build_simple_llm
+        from AIpaper2.google_scholar_paper_main import build_simple_llm
         node.llm_model = build_simple_llm()
     except Exception:
         node.llm_model = None

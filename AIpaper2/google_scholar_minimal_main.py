@@ -1,23 +1,23 @@
 """
-Google Scholar 订阅论文处理主入口
+Google Scholar 最小流程主入口
 
-在此文件中设定固定主题并组装示例邮件内容，调用 `GoogleScholarPaperGraph` 执行完整流程。
+在此文件中组装示例邮箱配置，调用 `GoogleScholarMinimalGraph` 执行仅“邮件链接提取 + PDF 获取”的流程。
 """
 
 import os
 from typing import List
 
-from AIpaper.Graphs import GoogleScholarPaperGraph
+try:
+    from AIpaper2.Graphs import GoogleScholarMinimalGraph
+    from AIpaper2.common_settings import build_graph_config
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from AIpaper2.Graphs import GoogleScholarMinimalGraph
+    from AIpaper2.common_settings import build_graph_config
 from scrapegraphai.utils import set_verbosity_info, set_formatting
-from AIpaper.common_settings import (
-    SUBJECTS_POOL,
-    build_simple_llm,
-    build_complex_llm,
-    build_graph_config,
-)
 
-# 固定主题（外部订阅信息在代码外配置，此处仅记录）
-FIXED_SUBJECT: str = "Financial Technology Survey"
 
 def build_email_config() -> dict:
     """
@@ -39,34 +39,28 @@ def build_email_config() -> dict:
         "account": account,
         "password": password,
         "sender_email": "scholaralerts-noreply@google.com",
-        "days_recent": 3,
+        "days_recent": 1,
     }
+
 
 def main():
     """
-    主函数，创建并运行流程图
+    主函数：创建并运行最小流程图（EmailLink + PdfFetch）
     """
     set_verbosity_info()
     set_formatting()
     email_config = build_email_config()
-    simple_llm = build_simple_llm()
-    complex_llm = build_complex_llm()
     graph_config = build_graph_config()
-    graph = GoogleScholarPaperGraph(
-        prompt="Google Scholar Subscription Pipeline",
+    graph = GoogleScholarMinimalGraph(
+        prompt="Google Scholar Minimal Pipeline",
         email_config=email_config,
-        subjects=SUBJECTS_POOL,
         config=graph_config,
-        simple_llm=simple_llm,
-        complex_llm=complex_llm,
     )
     papers = graph.run()
     for p in papers:
         print(
-            f"id={getattr(p, 'id', None)} subject={getattr(p, 'subject', '')} "
-            f"url={getattr(p, 'urlLink', '')} pdf={getattr(p, 'pdfLink', '')} "
-            f"md={getattr(p, 'mdLink', '')} overview={getattr(p, 'overviewLink', '')} "
-            f"analysis={getattr(p, 'analysisLink', '')}"
+            f"id={getattr(p, 'id', None)} url={getattr(p, 'urlLink', '')} "
+            f"pdf={getattr(p, 'pdfLink', '')}"
         )
 
 

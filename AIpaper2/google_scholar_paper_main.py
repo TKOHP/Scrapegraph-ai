@@ -7,9 +7,9 @@ Google Scholar 订阅论文处理主入口
 import os
 from typing import List
 
-from AIpaper.Graphs import GoogleScholarPaperGraph
+from AIpaper2.Graphs import GoogleScholarPaperGraph
 from scrapegraphai.utils import set_verbosity_info, set_formatting
-from AIpaper.common_settings import (
+from AIpaper2.common_settings import (
     SUBJECTS_POOL,
     build_simple_llm,
     build_complex_llm,

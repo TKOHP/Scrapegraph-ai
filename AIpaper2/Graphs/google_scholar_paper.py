@@ -66,7 +66,7 @@ class GoogleScholarPaperGraph(AbstractGraph):
         super().__init__(prompt, config, email_config, schema)
         self.logger = get_logger()
         self.input_key = "email_config"
-        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
+        db_path = (self.config or {}).get("db_path")
         self.db = DatabaseManager(db_path)
         for node in getattr(self, "graph", None).nodes:
             if isinstance(node, DocumentClassifyNode):
@@ -80,7 +80,7 @@ class GoogleScholarPaperGraph(AbstractGraph):
         """
         创建节点并构建执行图
         """
-        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
+        db_path = (self.config or {}).get("db_path")
         download_dir = (self.config or {}).get("download_dir", "AIpaper/data/papers")
         rebuild_md = bool((self.config or {}).get("rebuild_md", False))
         rebuild_classify = bool((self.config or {}).get("rebuild_classify", False))
@@ -91,7 +91,6 @@ class GoogleScholarPaperGraph(AbstractGraph):
             input="email_config",
             output=["papers"],
             node_config={
-                "db_path": db_path,
                 "use_qq_email": True,
             },
         )

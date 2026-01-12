@@ -1,14 +1,12 @@
 """
-Google Scholar 订阅论文处理图
+arXiv 订阅论文处理图
 
 按流程图依次执行：
-1) 邮件链接提取
+1) arXiv 链接提取
 2) PDF 获取与下载
 3) PDF 转标准化 Markdown
 4) 文档分类（提取 meta/subject/publishTime）
 5) 文献概览与深度分析（生成 overviewLink 与 analysisLink）
-
-同时提供对数据库的增删改查接口。
 """
 
 import time
@@ -21,7 +19,7 @@ from scrapegraphai.graphs.base_graph import BaseGraph
 from scrapegraphai.graphs.abstract_graph import AbstractGraph
 from ..Nodes import (
     DatabaseManager,
-    EmailLinkNode,
+    ArxivLinkNode,
     PdfFetchNode,
     PdfToMarkdownNode,
     DocumentClassifyNode,
@@ -31,17 +29,17 @@ from ..Nodes import (
 )
 
 
-class GoogleScholarPaperGraph(AbstractGraph):
+class ArxivPaperGraph(AbstractGraph):
     """
-    GoogleScholarPaperGraph
+    ArxivPaperGraph
     
-    管理从邮件到 PDF/Markdown 的完整处理流程，并暴露数据库操作。
+    管理从 arXiv 查询到 PDF/Markdown 的完整处理流程，并暴露数据库操作。
     """
 
     def __init__(
         self,
         prompt: str,
-        email_config: dict,
+        arxiv_config: dict,
         subjects: List[str],
         config: dict,
         schema: Optional[Type[BaseModel]] = None,
@@ -53,20 +51,20 @@ class GoogleScholarPaperGraph(AbstractGraph):
         
         Args:
             prompt: 流程说明或占位文本
-            email_config: 邮箱抓取配置字典（imap_server、account、password 等）
+            arxiv_config: arXiv 查询配置字典（query/queries/categories/max_results 等）
             subjects: 主题池（中文主题列表，如“金融科技”、“大模型智能体”等）
             config: 图配置，需包含 llm 字段；若不使用 LLM，可传入 {"llm": {"model_instance": None, "model_tokens": 8192}}
             schema: 可选的结构模式
         """
         self.simple_llm = simple_llm
         self.complex_llm = complex_llm
-        self.email_config = email_config or {}
+        self.arxiv_config = arxiv_config or {}
         self.subjects_pool = subjects
 
-        super().__init__(prompt, config, email_config, schema)
+        super().__init__(prompt, config, arxiv_config, schema)
         self.logger = get_logger()
-        self.input_key = "email_config"
-        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
+        self.input_key = "arxiv_config"
+        db_path = (self.config or {}).get("db_path")
         self.db = DatabaseManager(db_path)
         for node in getattr(self, "graph", None).nodes:
             if isinstance(node, DocumentClassifyNode):
@@ -80,19 +78,18 @@ class GoogleScholarPaperGraph(AbstractGraph):
         """
         创建节点并构建执行图
         """
-        db_path = (self.config or {}).get("db_path", "AIpaper/data/google_scholar_papers.db")
+        db_path = (self.config or {}).get("db_path")
         download_dir = (self.config or {}).get("download_dir", "AIpaper/data/papers")
         rebuild_md = bool((self.config or {}).get("rebuild_md", False))
         rebuild_classify = bool((self.config or {}).get("rebuild_classify", False))
         rebuild_overview = bool((self.config or {}).get("rebuild_overview", False))
         rebuild_analysis = bool((self.config or {}).get("rebuild_analysis", False))
 
-        email_node = EmailLinkNode(
-            input="email_config",
+        arxiv_node = ArxivLinkNode(
+            input="arxiv_config",
             output=["papers"],
             node_config={
                 "db_path": db_path,
-                "use_qq_email": True,
             },
         )
         pdf_node = PdfFetchNode(
@@ -135,17 +132,16 @@ class GoogleScholarPaperGraph(AbstractGraph):
         )
 
         return BaseGraph(
-            nodes=[email_node, pdf_node, md_node, classify_node, overview_node, analysis_node],
+            nodes=[arxiv_node, pdf_node, md_node, classify_node, overview_node, analysis_node],
             edges=[
-                (email_node, pdf_node),
+                (arxiv_node, pdf_node),
                 (pdf_node, md_node),
                 (md_node, classify_node),
-                # 暂时不需要进行overview
                 (classify_node, analysis_node),
                 # (classify_node, overview_node),
                 # (overview_node, analysis_node),
             ],
-            entry_point=email_node,
+            entry_point=arxiv_node,
             graph_name=self.__class__.__name__,
         )
 
@@ -153,17 +149,16 @@ class GoogleScholarPaperGraph(AbstractGraph):
         """
         执行流程并返回处理后的 `AIPaper` 列表
         """
-        email_cfg = self.source or {}
+        cfg = self.source or {}
         self.logger.info(
             f"流程图——开始执行 subjects_pool={len(self.subjects_pool)} "
-            f"days_recent={email_cfg.get('days_recent', 7)} "
-            f"sender_email={email_cfg.get('sender_email', 'scholaralerts-noreply@google.com')} "
-            f"required_subject_contains={(email_cfg.get('required_subject_contains') or '')}"
+            f"max_results={cfg.get('max_results', 30)} "
+            f"query={(cfg.get('query') or (cfg.get('queries') or []))}"
         )
         started = time.time()
         inputs = {
             "user_prompt": self.prompt,
-            "email_config": self.source,
+            "arxiv_config": self.source,
             "subjects": self.subjects_pool,
         }
         self.final_state, self.execution_info = self.graph.execute(inputs)
@@ -195,5 +190,3 @@ class GoogleScholarPaperGraph(AbstractGraph):
         数据库查询（可按主题过滤）
         """
         return self.db.list_papers(subject)
-
-#（已移除：邮箱与模型环境变量；请在示例 main 中配置并传入）

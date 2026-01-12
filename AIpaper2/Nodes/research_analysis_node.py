@@ -14,7 +14,7 @@ from scrapegraphai.nodes.base_node import BaseNode
 try:
     from .db_manager import DatabaseManager, AIPaper
 except ImportError:
-    from AIpaper.Nodes.db_manager import DatabaseManager, AIPaper
+    from AIpaper2.Nodes.db_manager import DatabaseManager, AIPaper
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
@@ -42,7 +42,7 @@ class ResearchAnalysisNode(BaseNode):
         super().__init__(node_name, "node", input, output, node_config=node_config)
         self.logger = get_logger()
         cfg = self.node_config or {}
-        self.db_path = cfg.get("db_path", "AIpaper/data/google_scholar_papers.db")
+        self.db_path = cfg.get("db_path")
         self.db = DatabaseManager(self.db_path)
         self.force_rebuild = bool(cfg.get("force_rebuild", False))
 
@@ -432,12 +432,13 @@ class ResearchAnalysisNode(BaseNode):
         state.update({self.output[0]: updated})
         return state
 
-def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_papers.db") -> None:
+def run_test_for_id(paper_id: int, db_path: Optional[str] = None) -> None:
     """
-    使用指定的论文 ID 测试文献深度分析与评价
+    使用指定的论文 ID 测试文档分类与元信息抽取
     """
     logger = get_logger()
-    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path}")
+    from .db_manager import DatabaseManager
+    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path or DatabaseManager.DEFAULT_DB_PATH}")
     db = DatabaseManager(db_path)
     paper = db.get_paper_by_id(int(paper_id))
     if paper is None:
@@ -452,7 +453,7 @@ def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_p
         node_config={"db_path": db_path, "force_rebuild": True},
     )
     try:
-        from AIpaper.google_scholar_paper_main import build_complex_llm
+        from AIpaper2.google_scholar_paper_main import build_complex_llm
         node.llm_model = build_complex_llm()
     except Exception:
         node.llm_model = None
@@ -470,7 +471,8 @@ def main() -> None:
     """
     # 在此直接设置需要测试的论文 ID
     paper_id = 197
-    db_path = "AIpaper/data/google_scholar_papers.db"
+    from .db_manager import DatabaseManager
+    db_path = DatabaseManager.DEFAULT_DB_PATH
     run_test_for_id(paper_id, db_path)
 
 if __name__ == "__main__":

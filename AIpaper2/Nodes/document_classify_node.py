@@ -15,10 +15,10 @@ from scrapegraphai.nodes.base_node import BaseNode
 try:
     from .db_manager import DatabaseManager, AIPaper
 except ImportError:
-    from AIpaper.Nodes.db_manager import DatabaseManager, AIPaper
+    from AIpaper2.Nodes.db_manager import DatabaseManager, AIPaper
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from AIpaper.common_settings import TYPE_POOL
+from AIpaper2.common_settings import TYPE_POOL
 
 
 class DocumentClassifyNode(BaseNode):
@@ -45,7 +45,7 @@ class DocumentClassifyNode(BaseNode):
         super().__init__(node_name, "node", input, output, node_config=node_config)
         self.logger = get_logger()
         cfg = self.node_config or {}
-        self.db_path = cfg.get("db_path", "AIpaper/data/google_scholar_papers.db")
+        self.db_path = cfg.get("db_path")
         self.db = DatabaseManager(self.db_path)
         self.force_rebuild = bool(cfg.get("force_rebuild", False))
 
@@ -219,12 +219,13 @@ class DocumentClassifyNode(BaseNode):
         state.update({self.output[0]: updated})
         return state
 
-def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_papers.db") -> None:
+def run_test_for_id(paper_id: int, db_path: Optional[str] = None) -> None:
     """
     使用指定的论文 ID 测试文档分类与元信息抽取
     """
     logger = get_logger()
-    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path}")
+    from .db_manager import DatabaseManager
+    logger.info(f"测试开始：paper_id={paper_id} db_path={db_path or DatabaseManager.DEFAULT_DB_PATH}")
     db = DatabaseManager(db_path)
     paper = db.get_paper_by_id(int(paper_id))
     if paper is None:
@@ -234,7 +235,7 @@ def run_test_for_id(paper_id: int, db_path: str = "AIpaper/data/google_scholar_p
         print(f"该记录缺少有效的 PDF 文件：id={paper_id} pdfLink={paper.pdfLink or ''}")
         return
     try:
-        from AIpaper.google_scholar_paper_main import build_simple_llm, SUBJECTS_POOL
+        from AIpaper2.google_scholar_paper_main import build_simple_llm, SUBJECTS_POOL
         llm = build_simple_llm()
         subjects_pool = SUBJECTS_POOL
     except Exception:

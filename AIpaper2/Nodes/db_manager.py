@@ -27,6 +27,8 @@ class AIPaper:
     subject: Optional[str]
     type: Optional[str]
     receivedTime: Optional[str]
+    raw_email_text: Optional[str] = None
+    subscribe_from: Optional[str] = None
 
 
 class DatabaseManager:
@@ -35,16 +37,17 @@ class DatabaseManager:
     
     提供初始化表结构，以及对 `AIpaper` 的增删改查接口。
     """
+    DEFAULT_DB_PATH: str = "AIpaper2/data/google_scholar_papers.db"
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: Optional[str] = None):
         """
         初始化数据库管理器并确保表结构存在
         
-        Args:
-            db_path: 数据库文件路径
+        参数:
+            db_path: 数据库文件路径；为 None 时使用 DEFAULT_DB_PATH
         """
         self.logger = get_logger()
-        self.db_path = db_path
+        self.db_path = db_path or self.DEFAULT_DB_PATH
         self._ensure_dir()
         self._init_db()
 
@@ -87,7 +90,9 @@ class DatabaseManager:
             publishTime TEXT,
             subject TEXT,
             type TEXT,
-            receivedTime TEXT
+            receivedTime TEXT,
+            raw_email_text TEXT,
+            subscribe_from TEXT
         );
         """
         try:
@@ -115,6 +120,8 @@ class DatabaseManager:
             need_add_received = "receivedTime" not in cols
             need_add_source = "source" not in cols
             need_add_type = "type" not in cols
+            need_add_raw_email = "raw_email_text" not in cols
+            need_add_subscribe_from = "subscribe_from" not in cols
             has_summary = "summaryLink" in cols
 
             if need_add_overview:
@@ -127,7 +134,19 @@ class DatabaseManager:
                 conn.execute("ALTER TABLE AIpaper ADD COLUMN source TEXT")
             if need_add_type:
                 conn.execute("ALTER TABLE AIpaper ADD COLUMN type TEXT")
-            if need_add_overview or need_add_analysis or need_add_received or need_add_source or need_add_type:
+            if need_add_raw_email:
+                conn.execute("ALTER TABLE AIpaper ADD COLUMN raw_email_text TEXT")
+            if need_add_subscribe_from:
+                conn.execute("ALTER TABLE AIpaper ADD COLUMN subscribe_from TEXT")
+            if (
+                need_add_overview
+                or need_add_analysis
+                or need_add_received
+                or need_add_source
+                or need_add_type
+                or need_add_raw_email
+                or need_add_subscribe_from
+            ):
                 conn.commit()
 
             if has_summary:
@@ -150,14 +169,16 @@ class DatabaseManager:
                         publishTime TEXT,
                         subject TEXT,
                         type TEXT,
-                        receivedTime TEXT
+                        receivedTime TEXT,
+                        raw_email_text TEXT,
+                        subscribe_from TEXT
                     );
                     """
                 )
                 conn.execute(
                     """
-                    INSERT INTO AIpaper (id, urlLink, source, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, type, receivedTime)
-                    SELECT id, urlLink, NULL, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, NULL, NULL
+                    INSERT INTO AIpaper (id, urlLink, source, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, type, receivedTime, raw_email_text, subscribe_from)
+                    SELECT id, urlLink, NULL, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, NULL, NULL, NULL, NULL
                     FROM AIpaper_old;
                     """
                 )
@@ -180,8 +201,8 @@ class DatabaseManager:
             with self._get_conn() as conn:
                 cur = conn.execute(
                     """
-                    INSERT INTO AIpaper (urlLink, source, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, type, receivedTime)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO AIpaper (urlLink, source, pdfLink, mdLink, overviewLink, analysisLink, meta, publishTime, subject, type, receivedTime, raw_email_text, subscribe_from)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper.urlLink,
@@ -195,6 +216,8 @@ class DatabaseManager:
                         paper.subject,
                         paper.type,
                         paper.receivedTime,
+                        paper.raw_email_text,
+                        paper.subscribe_from,
                     ),
                 )
                 conn.commit()
@@ -241,6 +264,8 @@ class DatabaseManager:
                         subject=updates.get("subject"),
                         type=updates.get("type"),
                         receivedTime=updates.get("receivedTime"),
+                        raw_email_text=updates.get("raw_email_text"),
+                        subscribe_from=updates.get("subscribe_from"),
                     )
                     return self.insert_paper(paper)
         except Exception as e:
@@ -302,6 +327,8 @@ class DatabaseManager:
                     subject=row["subject"],
                     type=row["type"],
                     receivedTime=row["receivedTime"],
+                    raw_email_text=row["raw_email_text"],
+                    subscribe_from=row["subscribe_from"],
                 )
         except Exception as e:
             self.logger.error(f"查询论文失败: {e}")
@@ -335,6 +362,8 @@ class DatabaseManager:
                         subject=r["subject"],
                         type=r["type"],
                         receivedTime=r["receivedTime"],
+                        raw_email_text=r["raw_email_text"],
+                        subscribe_from=r["subscribe_from"],
                     )
                     for r in rows
                 ]
@@ -365,8 +394,9 @@ class DatabaseManager:
                     subject=r["subject"],
                     type=r["type"],
                     receivedTime=r["receivedTime"],
+                    raw_email_text=r["raw_email_text"],
+                    subscribe_from=r["subscribe_from"],
                 )
         except Exception as e:
             self.logger.error(f"按 URL 查询失败: {e}")
             raise
-
