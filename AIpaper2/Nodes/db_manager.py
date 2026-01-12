@@ -334,19 +334,30 @@ class DatabaseManager:
             self.logger.error(f"查询论文失败: {e}")
             raise
 
-    def list_papers(self, subject: Optional[str] = None) -> List[AIPaper]:
+    def list_papers(self, subject: Optional[str] = None, subscribe_from: Optional[str] = None) -> List[AIPaper]:
         """
-        列出论文记录，可按主题过滤
+        列出论文记录，可按主题或订阅来源过滤
         """
         try:
             with self._get_conn() as conn:
+                query = "SELECT * FROM AIpaper"
+                params = []
+                conditions = []
+                
                 if subject:
-                    cur = conn.execute(
-                        "SELECT * FROM AIpaper WHERE subject = ? ORDER BY id DESC",
-                        (subject,),
-                    )
-                else:
-                    cur = conn.execute("SELECT * FROM AIpaper ORDER BY id DESC")
+                    conditions.append("subject = ?")
+                    params.append(subject)
+                
+                if subscribe_from:
+                    conditions.append("subscribe_from = ?")
+                    params.append(subscribe_from)
+                
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                
+                query += " ORDER BY id DESC"
+                
+                cur = conn.execute(query, tuple(params))
                 rows = cur.fetchall()
                 return [
                     AIPaper(

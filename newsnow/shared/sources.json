@@ -1,0 +1,11 @@
+{
+  "general": {
+    "name": "General",
+    "color": "blue",
+    "title": "AI Papers",
+    "type": "realtime",
+    "column": "papers",
+    "interval": 600000,
+    "home": "/"
+  }
+}
